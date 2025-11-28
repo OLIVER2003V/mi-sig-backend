@@ -1,0 +1,80 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.pyo
+*.pyd
+*.pdb
+*.stackdump
+
+# ---- Django ----
+*.log
+local_settings.py
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+static/
+
+# Django migration cache
+*/migrations/__pycache__/
+*/migrations/*.pyc
+*/migrations/*.pyo
+*/migrations/*.pyd
+*/migrations/*.pdb
+# (opcional) ignora las migraciones iniciales si quieres controlarlas manualmente
+# */migrations/*
+
+# ---- Environments ----
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+*.env
+
+# ---- IDEs & Editors ----
+.vscode/
+.idea/
+*.swp
+*~
+.project
+.pydevproject
+
+# ---- Coverage / Testing ----
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+
+# ---- Node/Angular (si usas Angular en el mismo repo) ----
+node_modules/
+npm-debug.log
+yarn-debug.log*
+yarn-error.log*
+/dist/
+/build/
+/.angular/
+
+# ---- OS ----
+.DS_Store
+Thumbs.db
+
+# ---- Others ----
+*.bak
+*.tmp
+*.orig

@@ -1,0 +1,596 @@
+{
+    "openapi": "3.0.3",
+    "info": {
+        "title": "API de Líneas de Microbuses",
+        "version": "1.0.0",
+        "description": "Documentación de líneas, rutas y puntos (ida/vuelta)."
+    },
+    "paths": {
+        "/api/lineas/": {
+            "get": {
+                "operationId": "listar_lineas",
+                "description": "Devuelve la lista completa de líneas de microbús.",
+                "summary": "Listar todas las líneas",
+                "tags": [
+                    "lineas"
+                ],
+                "security": [
+                    {
+                        "cookieAuth": []
+                    },
+                    {
+                        "basicAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "array",
+                                    "items": {
+                                        "$ref": "#/components/schemas/Linea"
+                                    }
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/api/lineas/{codigo}/rutas/{sentido}/puntos/": {
+            "get": {
+                "operationId": "obtener_puntos_ruta_linea",
+                "description": "Dado el código de una línea (ej. L001) y el sentido de la ruta (1 = ida, 2 = vuelta), devuelve todos los puntos ordenados con:\n- tiempo del tramo\n- tiempo acumulado hasta cada punto (tiempo de llegada)\n- distancia del tramo\n- distancia acumulada",
+                "summary": "Puntos de una línea por sentido (ida/vuelta)",
+                "parameters": [
+                    {
+                        "in": "path",
+                        "name": "codigo",
+                        "schema": {
+                            "type": "string"
+                        },
+                        "description": "Código de la línea (por ejemplo L001)",
+                        "required": true
+                    },
+                    {
+                        "in": "path",
+                        "name": "sentido",
+                        "schema": {
+                            "type": "integer"
+                        },
+                        "description": "Sentido de la ruta: 1 = ida, 2 = vuelta",
+                        "required": true
+                    }
+                ],
+                "tags": [
+                    "lineas"
+                ],
+                "security": [
+                    {
+                        "cookieAuth": []
+                    },
+                    {
+                        "basicAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RutaConPuntos"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/api/rutas/planificar/": {
+            "post": {
+                "operationId": "planear_ruta_por_coordenadas",
+                "description": "Recibe coordenadas de inicio y fin, construye un grafo con:\n- Tramos de bus (LineaRuta).\n- Caminatas desde el origen a paradas cercanas.\n- Caminatas entre paradas cercanas (trasbordos caminando).\n- Caminatas desde paradas cercanas hasta el destino.\n\nUtiliza Dijkstra con el tiempo como peso, penaliza las caminatas (tiempo más alto que el bus), penaliza los trasbordos y limita a 2 cambios de línea.",
+                "summary": "Ruta más corta con máximo 2 trasbordos (considerando caminata)",
+                "tags": [
+                    "rutas"
+                ],
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "$ref": "#/components/schemas/RutaPlanRequest"
+                            }
+                        },
+                        "application/x-www-form-urlencoded": {
+                            "schema": {
+                                "$ref": "#/components/schemas/RutaPlanRequest"
+                            }
+                        },
+                        "multipart/form-data": {
+                            "schema": {
+                                "$ref": "#/components/schemas/RutaPlanRequest"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "security": [
+                    {
+                        "cookieAuth": []
+                    },
+                    {
+                        "basicAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/RutaPlanificada"
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        },
+        "/api/schema/": {
+            "get": {
+                "operationId": "schema_retrieve",
+                "description": "OpenApi3 schema for this API. Format can be selected via content negotiation.\n\n- YAML: application/vnd.oai.openapi\n- JSON: application/vnd.oai.openapi+json",
+                "parameters": [
+                    {
+                        "in": "query",
+                        "name": "format",
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "json",
+                                "yaml"
+                            ]
+                        }
+                    },
+                    {
+                        "in": "query",
+                        "name": "lang",
+                        "schema": {
+                            "type": "string",
+                            "enum": [
+                                "af",
+                                "ar",
+                                "ar-dz",
+                                "ast",
+                                "az",
+                                "be",
+                                "bg",
+                                "bn",
+                                "br",
+                                "bs",
+                                "ca",
+                                "ckb",
+                                "cs",
+                                "cy",
+                                "da",
+                                "de",
+                                "dsb",
+                                "el",
+                                "en",
+                                "en-au",
+                                "en-gb",
+                                "eo",
+                                "es",
+                                "es-ar",
+                                "es-co",
+                                "es-mx",
+                                "es-ni",
+                                "es-ve",
+                                "et",
+                                "eu",
+                                "fa",
+                                "fi",
+                                "fr",
+                                "fy",
+                                "ga",
+                                "gd",
+                                "gl",
+                                "he",
+                                "hi",
+                                "hr",
+                                "hsb",
+                                "hu",
+                                "hy",
+                                "ia",
+                                "id",
+                                "ig",
+                                "io",
+                                "is",
+                                "it",
+                                "ja",
+                                "ka",
+                                "kab",
+                                "kk",
+                                "km",
+                                "kn",
+                                "ko",
+                                "ky",
+                                "lb",
+                                "lt",
+                                "lv",
+                                "mk",
+                                "ml",
+                                "mn",
+                                "mr",
+                                "ms",
+                                "my",
+                                "nb",
+                                "ne",
+                                "nl",
+                                "nn",
+                                "os",
+                                "pa",
+                                "pl",
+                                "pt",
+                                "pt-br",
+                                "ro",
+                                "ru",
+                                "sk",
+                                "sl",
+                                "sq",
+                                "sr",
+                                "sr-latn",
+                                "sv",
+                                "sw",
+                                "ta",
+                                "te",
+                                "tg",
+                                "th",
+                                "tk",
+                                "tr",
+                                "tt",
+                                "udm",
+                                "ug",
+                                "uk",
+                                "ur",
+                                "uz",
+                                "vi",
+                                "zh-hans",
+                                "zh-hant"
+                            ]
+                        }
+                    }
+                ],
+                "tags": [
+                    "schema"
+                ],
+                "security": [
+                    {
+                        "cookieAuth": []
+                    },
+                    {
+                        "basicAuth": []
+                    },
+                    {}
+                ],
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/vnd.oai.openapi": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                }
+                            },
+                            "application/yaml": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                }
+                            },
+                            "application/vnd.oai.openapi+json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                }
+                            },
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "additionalProperties": {}
+                                }
+                            }
+                        },
+                        "description": ""
+                    }
+                }
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "Coordenadas": {
+                "type": "object",
+                "properties": {
+                    "lat": {
+                        "type": "number",
+                        "format": "double"
+                    },
+                    "lon": {
+                        "type": "number",
+                        "format": "double"
+                    }
+                },
+                "required": [
+                    "lat",
+                    "lon"
+                ]
+            },
+            "Linea": {
+                "type": "object",
+                "description": "Serializer simple para listar líneas.\nDevuelve: id, codigo, nombre y color (hex).",
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "readOnly": true
+                    },
+                    "codigo": {
+                        "type": "string",
+                        "maxLength": 10
+                    },
+                    "nombre": {
+                        "type": "string",
+                        "maxLength": 100
+                    },
+                    "color": {
+                        "type": "string",
+                        "maxLength": 7
+                    }
+                },
+                "required": [
+                    "codigo",
+                    "color",
+                    "id"
+                ]
+            },
+            "LineaTrayecto": {
+                "type": "object",
+                "properties": {
+                    "codigo": {
+                        "type": "string"
+                    },
+                    "nombre": {
+                        "type": "string"
+                    },
+                    "sentido": {
+                        "type": "integer"
+                    }
+                },
+                "required": [
+                    "codigo",
+                    "nombre",
+                    "sentido"
+                ]
+            },
+            "PuntoRuta": {
+                "type": "object",
+                "properties": {
+                    "orden": {
+                        "type": "integer"
+                    },
+                    "latitud": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,3}(?:\\.\\d{0,6})?$"
+                    },
+                    "longitud": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,3}(?:\\.\\d{0,6})?$"
+                    },
+                    "descripcion": {
+                        "type": "string"
+                    },
+                    "distancia_tramo": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,8}(?:\\.\\d{0,2})?$"
+                    },
+                    "distancia_acumulada": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,8}(?:\\.\\d{0,2})?$"
+                    },
+                    "tiempo_tramo": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,4}(?:\\.\\d{0,2})?$"
+                    },
+                    "tiempo_acumulado": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,4}(?:\\.\\d{0,2})?$"
+                    }
+                },
+                "required": [
+                    "descripcion",
+                    "distancia_acumulada",
+                    "distancia_tramo",
+                    "latitud",
+                    "longitud",
+                    "orden",
+                    "tiempo_acumulado",
+                    "tiempo_tramo"
+                ]
+            },
+            "PuntoRutaPlanificada": {
+                "type": "object",
+                "properties": {
+                    "orden": {
+                        "type": "integer"
+                    },
+                    "latitud": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,3}(?:\\.\\d{0,6})?$"
+                    },
+                    "longitud": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,3}(?:\\.\\d{0,6})?$"
+                    },
+                    "descripcion": {
+                        "type": "string"
+                    },
+                    "distancia_tramo": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,8}(?:\\.\\d{0,2})?$"
+                    },
+                    "distancia_acumulada": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,8}(?:\\.\\d{0,2})?$"
+                    },
+                    "tiempo_tramo": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,4}(?:\\.\\d{0,2})?$"
+                    },
+                    "tiempo_acumulado": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,4}(?:\\.\\d{0,2})?$"
+                    },
+                    "linea_trasbordo": {
+                        "type": "string",
+                        "nullable": true,
+                        "description": "Código de la línea a la que se hace trasbordo en este punto (o null si no hay trasbordo)."
+                    }
+                },
+                "required": [
+                    "descripcion",
+                    "distancia_acumulada",
+                    "distancia_tramo",
+                    "latitud",
+                    "linea_trasbordo",
+                    "longitud",
+                    "orden",
+                    "tiempo_acumulado",
+                    "tiempo_tramo"
+                ]
+            },
+            "RutaConPuntos": {
+                "type": "object",
+                "properties": {
+                    "linea_codigo": {
+                        "type": "string"
+                    },
+                    "linea_nombre": {
+                        "type": "string"
+                    },
+                    "sentido": {
+                        "type": "integer"
+                    },
+                    "descripcion_ruta": {
+                        "type": "string"
+                    },
+                    "distancia_total": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,8}(?:\\.\\d{0,2})?$"
+                    },
+                    "tiempo_total": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,4}(?:\\.\\d{0,2})?$"
+                    },
+                    "puntos": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/PuntoRuta"
+                        }
+                    }
+                },
+                "required": [
+                    "descripcion_ruta",
+                    "distancia_total",
+                    "linea_codigo",
+                    "linea_nombre",
+                    "puntos",
+                    "sentido",
+                    "tiempo_total"
+                ]
+            },
+            "RutaPlanRequest": {
+                "type": "object",
+                "properties": {
+                    "inicio": {
+                        "$ref": "#/components/schemas/Coordenadas"
+                    },
+                    "fin": {
+                        "$ref": "#/components/schemas/Coordenadas"
+                    }
+                },
+                "required": [
+                    "fin",
+                    "inicio"
+                ]
+            },
+            "RutaPlanificada": {
+                "type": "object",
+                "properties": {
+                    "lineas": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/LineaTrayecto"
+                        }
+                    },
+                    "descripcion_ruta": {
+                        "type": "string"
+                    },
+                    "distancia_total": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,8}(?:\\.\\d{0,2})?$"
+                    },
+                    "tiempo_total": {
+                        "type": "string",
+                        "format": "decimal",
+                        "pattern": "^-?\\d{0,4}(?:\\.\\d{0,2})?$"
+                    },
+                    "puntos": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/PuntoRutaPlanificada"
+                        }
+                    }
+                },
+                "required": [
+                    "descripcion_ruta",
+                    "distancia_total",
+                    "lineas",
+                    "puntos",
+                    "tiempo_total"
+                ]
+            }
+        },
+        "securitySchemes": {
+            "basicAuth": {
+                "type": "http",
+                "scheme": "basic"
+            },
+            "cookieAuth": {
+                "type": "apiKey",
+                "in": "cookie",
+                "name": "sessionid"
+            }
+        }
+    }
+}
