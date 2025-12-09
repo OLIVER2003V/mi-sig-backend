@@ -4,14 +4,16 @@ from decimal import Decimal
 
 import django
 import pandas as pd
-from django.db import transaction
-from routes.models import Linea, Punto, LineaRuta, LineaPunto
 
-
+# Configurar Django ANTES de importar modelos
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "buses.settings")
 BASE_DIR = Path(__file__).resolve().parent
 
 django.setup()
+
+# Ahora sí podemos importar los modelos
+from django.db import transaction
+from routes.models import Linea, Punto, LineaRuta, LineaPunto
 
 
 
