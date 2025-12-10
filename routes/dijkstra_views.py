@@ -13,6 +13,7 @@ from .models import Punto, LineaRuta
 from .serializers import (
     RutaPlanRequestSerializer,
     RutaPlanificadaSerializer,
+    MultipleRutasSerializer,
 )
 
 Edge = namedtuple(
@@ -24,6 +25,7 @@ Edge = namedtuple(
         'distancia',
         'linea_id',
         'linea_codigo',
+        'linea_codigo_base',  # código sin sufijos (ej: "18" en lugar de "18 IDA")
         'linea_nombre',
         'linea_ruta_id',
         'numero_ruta',
@@ -41,7 +43,7 @@ class PlanificarRutaView(APIView):
 
     @extend_schema(
         operation_id="planear_ruta_por_coordenadas",
-        summary="Ruta más corta con máximo 2 trasbordos (considerando caminata)",
+        summary="Rutas alternativas con máximo 2 trasbordos (considerando caminata)",
         description=(
             "Recibe coordenadas de inicio y fin, construye un grafo con:\n"
             "- Tramos de bus (LineaRuta).\n"
@@ -50,10 +52,11 @@ class PlanificarRutaView(APIView):
             "- Caminatas desde paradas cercanas hasta el destino.\n\n"
             "Utiliza Dijkstra con el tiempo como peso, penaliza las caminatas "
             "(tiempo más alto que el bus), penaliza los trasbordos y limita a "
-            "2 cambios de línea."
+            "2 cambios de línea.\n\n"
+            "Devuelve hasta 3 rutas alternativas ordenadas por tiempo."
         ),
         request=RutaPlanRequestSerializer,
-        responses={200: RutaPlanificadaSerializer},
+        responses={200: MultipleRutasSerializer},
     )
     def post(self, request):
         req_serializer = RutaPlanRequestSerializer(data=request.data)
@@ -85,16 +88,17 @@ class PlanificarRutaView(APIView):
             return (lat1 - lat2) ** 2 + (lon1 - lon2) ** 2
 
         DEG_TO_KM = 111.0  # aproximación: 1° ~ 111 km
-        WALK_SPEED_KMH = 4.0  # velocidad de caminata
-        WALK_PENALTY_FACTOR = Decimal("3.0")  # penalizar caminar
+        WALK_SPEED_KMH = 5.0  # velocidad de caminata (aumentada a 5 km/h, más realista)
+        WALK_DISTANCE_FACTOR = 1.4  # factor para convertir distancia en línea recta a distancia por calles
+        WALK_PENALTY_FACTOR = Decimal("1.5")  # penalizar caminar (reducido de 3.0 a 1.5)
         # Penalización extra por trasbordo (en minutos)
         TRANSFER_PENALTY_MIN = Decimal("8")
 
         # radio aprox en grados^2
-        # ~400 m para trasbordos caminando
+        # ~400 m para trasbordos caminando entre paradas
         MAX_TRANSFER_WALK_D2 = 1.5e-5
-        # ~1 km para caminar desde parada al destino
-        MAX_DEST_WALK_D2 = 9e-5
+        # ~1.5 km para caminar desde parada al destino (aumentado para evitar trasbordos innecesarios)
+        MAX_DEST_WALK_D2 = 2e-4  # Aumentado de 9e-5 para permitir más caminata al final
         # número máximo de paradas cercanas al origen para crear aristas de caminata
         MAX_ORIGIN_NEIGHBORS = 10
 
@@ -103,11 +107,17 @@ class PlanificarRutaView(APIView):
         def tiempo_desde_dist_km(dist_km: float) -> Decimal:
             """
             Convierte una distancia en km a tiempo de caminata en minutos,
-            aplicando penalización para preferir bus cuando sea posible.
+            aplicando:
+            1. Factor para compensar que la distancia real por calles es mayor que línea recta
+            2. Penalización moderada para preferir bus cuando sea posible.
             """
             if dist_km <= 0:
                 return Decimal("0")
-            walk_min = (dist_km / WALK_SPEED_KMH) * 60.0
+            # Ajustar distancia para simular caminar por calles (no línea recta)
+            dist_km_real = dist_km * WALK_DISTANCE_FACTOR
+            # Calcular tiempo real de caminata
+            walk_min = (dist_km_real / WALK_SPEED_KMH) * 60.0
+            # Aplicar penalización moderada
             walk_min *= float(WALK_PENALTY_FACTOR)
             return Decimal(str(walk_min))
 
@@ -149,6 +159,18 @@ class PlanificarRutaView(APIView):
 
         edges = defaultdict(list)
 
+        def extraer_codigo_base(codigo):
+            """
+            Extrae el código base de una línea, removiendo sufijos como IDA, VUELTA, etc.
+            Ejemplos: "18" -> "18", "18 IDA" -> "18", "18 VUELTA" -> "18"
+            """
+            codigo_upper = str(codigo).upper().strip()
+            # Remover palabras comunes que indican sentido
+            for sufijo in [' IDA', ' VUELTA', ' RETORNO', ' A', ' B', '-IDA', '-VUELTA']:
+                if codigo_upper.endswith(sufijo):
+                    codigo_upper = codigo_upper[:-len(sufijo)].strip()
+            return codigo_upper
+
         lineas_ruta = LineaRuta.objects.select_related("linea").all()
         print(f"[GRAFO] LineasRuta totales: {lineas_ruta.count()}")
 
@@ -172,6 +194,7 @@ class PlanificarRutaView(APIView):
                     distancia=curr_lp.distancia,
                     linea_id=lr.linea_id,
                     linea_codigo=lr.linea.codigo,
+                    linea_codigo_base=extraer_codigo_base(lr.linea.codigo),
                     linea_nombre=lr.linea.nombre,
                     linea_ruta_id=lr.id,
                     numero_ruta=lr.numero_ruta,
@@ -181,6 +204,14 @@ class PlanificarRutaView(APIView):
 
         total_edges_bus = sum(len(v) for v in edges.values())
         print(f"[GRAFO] Aristas de BUS totales: {total_edges_bus}")
+
+        # Crear un diccionario para mapear linea_ruta_id a linea_codigo_base
+        linea_ruta_to_codigo_base = {}
+        for edge_list in edges.values():
+            for edge in edge_list:
+                if not edge.es_caminar and edge.linea_ruta_id is not None:
+                    linea_ruta_to_codigo_base[edge.linea_ruta_id] = edge.linea_codigo_base
+        print(f"[GRAFO] Mapeo linea_ruta_id -> codigo_base: {len(linea_ruta_to_codigo_base)} entradas")
 
         if not edges:
             return Response(
@@ -265,15 +296,18 @@ class PlanificarRutaView(APIView):
             d2 = dlat * dlat + dlon * dlon
             dist_deg = math.sqrt(d2)
             dist_km = dist_deg * DEG_TO_KM
+            # Distancia real por calles (no línea recta)
+            dist_km_real = dist_km * WALK_DISTANCE_FACTOR
 
             t_min = tiempo_desde_dist_km(dist_km)
             edge = Edge(
                 from_punto_id=ORIGIN_NODE_ID,
                 to_punto_id=p.id,
                 tiempo=t_min,
-                distancia=Decimal(str(dist_km)),
+                distancia=Decimal(str(dist_km_real)),  # guardar distancia real
                 linea_id=None,
                 linea_codigo="CAMINAR_ORIGEN",
+                linea_codigo_base="CAMINAR",
                 linea_nombre="Caminata desde origen",
                 linea_ruta_id=None,
                 numero_ruta=0,
@@ -308,8 +342,9 @@ class PlanificarRutaView(APIView):
 
                 dist_deg = math.sqrt(d2)
                 dist_km = dist_deg * DEG_TO_KM
+                dist_km_real = dist_km * WALK_DISTANCE_FACTOR  # distancia por calles
                 t_min = tiempo_desde_dist_km(dist_km)
-                dist_dec = Decimal(str(dist_km))
+                dist_dec = Decimal(str(dist_km_real))  # guardar distancia real
 
                 e_ij = Edge(
                     from_punto_id=p_i.id,
@@ -318,6 +353,7 @@ class PlanificarRutaView(APIView):
                     distancia=dist_dec,
                     linea_id=None,
                     linea_codigo="CAMINAR",
+                    linea_codigo_base="CAMINAR",
                     linea_nombre="Caminata entre paradas",
                     linea_ruta_id=None,
                     numero_ruta=0,
@@ -330,6 +366,7 @@ class PlanificarRutaView(APIView):
                     distancia=dist_dec,
                     linea_id=None,
                     linea_codigo="CAMINAR",
+                    linea_codigo_base="CAMINAR",
                     linea_nombre="Caminata entre paradas",
                     linea_ruta_id=None,
                     numero_ruta=0,
@@ -353,14 +390,16 @@ class PlanificarRutaView(APIView):
 
             dist_deg = math.sqrt(d2)
             dist_km = dist_deg * DEG_TO_KM
+            dist_km_real = dist_km * WALK_DISTANCE_FACTOR  # distancia por calles
             t_min = tiempo_desde_dist_km(dist_km)
             edge = Edge(
                 from_punto_id=p.id,
                 to_punto_id=DEST_NODE_ID,
                 tiempo=t_min,
-                distancia=Decimal(str(dist_km)),
+                distancia=Decimal(str(dist_km_real)),  # guardar distancia real
                 linea_id=None,
                 linea_codigo="CAMINAR_DESTINO",
+                linea_codigo_base="CAMINAR",
                 linea_nombre="Caminata al destino",
                 linea_ruta_id=None,
                 numero_ruta=0,
@@ -379,6 +418,7 @@ class PlanificarRutaView(APIView):
         )
 
         max_trasbordos = 2
+        K_RUTAS = 3  # Número de rutas alternativas a buscar
 
         dist = {}
         prev_state = {}
@@ -387,20 +427,20 @@ class PlanificarRutaView(APIView):
         start_state = (ORIGIN_NODE_ID, None, 0) 
         dist[start_state] = Decimal("0")
         heapq.heappush(pq, (Decimal("0"), ORIGIN_NODE_ID, None, 0))
-        print(f"[DIJKSTRA] Estado inicial: punto={ORIGIN_NODE_ID}, linea=None, trasbordos=0")
+        print(f"[DIJKSTRA] Estado inicial: punto={ORIGIN_NODE_ID}, linea_ruta=None, trasbordos=0")
 
-        best_state = None
+        dest_states = []  # Lista de estados que llegaron al destino
         debug_steps = 0
         max_debug_steps = 300 
 
-        while pq:
-            cost, punto_id, linea_id, trasbordos = heapq.heappop(pq)
-            state = (punto_id, linea_id, trasbordos)
+        while pq and len(dest_states) < K_RUTAS:
+            cost, punto_id, linea_ruta_id, trasbordos = heapq.heappop(pq)
+            state = (punto_id, linea_ruta_id, trasbordos)
 
             if debug_steps < max_debug_steps:
                 print(
                     f"[DIJKSTRA] POP cost={cost} punto={punto_id} "
-                    f"linea={linea_id} trasbordos={trasbordos}"
+                    f"linea_ruta={linea_ruta_id} trasbordos={trasbordos}"
                 )
 
             if dist.get(state, None) is not None and cost > dist[state]:
@@ -409,31 +449,64 @@ class PlanificarRutaView(APIView):
                 continue
 
             if punto_id == DEST_NODE_ID:
-                best_state = state
+                dest_states.append((state, cost))
                 print(
-                    f"[DIJKSTRA] >>> Alcanzado nodo DESTINO (id={DEST_NODE_ID}) "
-                    f"con costo={cost} trasbordos={trasbordos}"
+                    f"[DIJKSTRA] >>> Alcanzado nodo DESTINO #{len(dest_states)} "
+                    f"(id={DEST_NODE_ID}) con costo={cost} trasbordos={trasbordos}"
                 )
-                break
+                if len(dest_states) >= K_RUTAS:
+                    break
+                continue  # Continuar buscando más rutas
 
             edges_punto = edges.get(punto_id, [])
             for edge in edges_punto:
                 if edge.es_caminar:
-                    edge_linea = linea_id
+                    # Si caminamos, mantenemos la linea_ruta actual
+                    edge_linea_ruta = linea_ruta_id
+                    edge_linea_codigo_base = None
                 else:
-                    edge_linea = edge.linea_id
+                    # Si tomamos un bus, la nueva linea_ruta es la del edge
+                    edge_linea_ruta = edge.linea_ruta_id
+                    edge_linea_codigo_base = edge.linea_codigo_base
 
                 nuevo_trasbordos = trasbordos
-                nueva_linea = linea_id
+                nueva_linea_ruta = linea_ruta_id
                 transfer_penalty = Decimal("0")
 
-                if edge_linea is not None:
-                    if nueva_linea is None:
-                        nueva_linea = edge_linea
-                    elif nueva_linea != edge_linea:
-                        nuevo_trasbordos = trasbordos + 1
-                        nueva_linea = edge_linea
-                        transfer_penalty = TRANSFER_PENALTY_MIN
+                # Obtener el codigo_base de la linea actual (si existe)
+                linea_codigo_base_actual = None
+                if linea_ruta_id is not None:
+                    linea_codigo_base_actual = linea_ruta_to_codigo_base.get(linea_ruta_id)
+
+                if edge_linea_ruta is not None:
+                    if nueva_linea_ruta is None:
+                        # Primera vez subiendo a una línea
+                        nueva_linea_ruta = edge_linea_ruta
+                    elif nueva_linea_ruta != edge_linea_ruta:
+                        # Cambio de linea_ruta_id
+                        # Verificar si es transbordo real (diferente codigo_base) o solo cambio de sentido
+                        if linea_codigo_base_actual and edge_linea_codigo_base and linea_codigo_base_actual != edge_linea_codigo_base:
+                            # Transbordo real a línea diferente
+                            nuevo_trasbordos = trasbordos + 1
+                            transfer_penalty = TRANSFER_PENALTY_MIN
+                            if debug_steps < max_debug_steps:
+                                print(
+                                    f"   [DIJKSTRA] TRANSBORDO detectado: "
+                                    f"linea_anterior={linea_codigo_base_actual} -> linea_nueva={edge_linea_codigo_base} "
+                                    f"({edge.linea_codigo})"
+                                )
+                        else:
+                            # Cambio de sentido en la misma línea - aplicar penalización de transbordo
+                            # pero sin aumentar el contador de trasbordos
+                            transfer_penalty = TRANSFER_PENALTY_MIN
+                            if debug_steps < max_debug_steps:
+                                print(
+                                    f"   [DIJKSTRA] CAMBIO DE SENTIDO detectado: "
+                                    f"linea_ruta_anterior={linea_ruta_id} -> linea_ruta_nueva={edge_linea_ruta} "
+                                    f"(mismo codigo_base={edge_linea_codigo_base})"
+                                )
+                        nueva_linea_ruta = edge_linea_ruta
+
 
                 if nuevo_trasbordos > max_trasbordos:
                     if debug_steps < max_debug_steps:
@@ -445,19 +518,19 @@ class PlanificarRutaView(APIView):
                     continue
 
                 nuevo_cost = cost + edge.tiempo + transfer_penalty
-                next_state = (edge.to_punto_id, nueva_linea, nuevo_trasbordos)
+                next_state = (edge.to_punto_id, nueva_linea_ruta, nuevo_trasbordos)
 
                 if nuevo_cost < dist.get(next_state, INF):
                     dist[next_state] = nuevo_cost
                     prev_state[next_state] = (state, edge)
                     heapq.heappush(
                         pq,
-                        (nuevo_cost, edge.to_punto_id, nueva_linea, nuevo_trasbordos),
+                        (nuevo_cost, edge.to_punto_id, nueva_linea_ruta, nuevo_trasbordos),
                     )
                     if debug_steps < max_debug_steps:
                         print(
                             f"   [DIJKSTRA] PUSH -> punto={edge.to_punto_id} "
-                            f"linea={nueva_linea} ({edge.linea_codigo}) "
+                            f"linea_ruta={nueva_linea_ruta} ({edge.linea_codigo}) "
                             f"trasbordos={nuevo_trasbordos} "
                             f"cost={nuevo_cost} (penalizacion_trasbordo={transfer_penalty})"
                         )
@@ -465,8 +538,9 @@ class PlanificarRutaView(APIView):
             debug_steps += 1
 
         print(f"[DIJKSTRA] Estados totales visitados: {len(dist)}")
+        print(f"[DIJKSTRA] Rutas al destino encontradas: {len(dest_states)}")
 
-        if best_state is None:
+        if not dest_states:
             print("[DIJKSTRA] *** NO SE ENCONTRÓ RUTA AL DESTINO ***")
             return Response(
                 {
@@ -475,153 +549,153 @@ class PlanificarRutaView(APIView):
                 status=status.HTTP_404_NOT_FOUND,
             )
 
-        print(f"[DIJKSTRA] best_state final: {best_state}, costo={dist[best_state]}")
+        # Procesar cada ruta encontrada
+        rutas_procesadas = []
+        
+        for idx_ruta, (best_state, cost_final) in enumerate(dest_states):
+            print(f"\n[RUTA #{idx_ruta + 1}] Procesando estado: {best_state}, costo={cost_final}")
 
-        segmentos = []
-        path_states = [best_state]
+            segmentos = []
+            path_states = [best_state]
 
-        state = best_state
-        while state in prev_state:
-            prev_s, edge = prev_state[state]
-            segmentos.append(edge)
-            path_states.append(prev_s)
-            state = prev_s
+            state = best_state
+            while state in prev_state:
+                prev_s, edge = prev_state[state]
+                segmentos.append(edge)
+                path_states.append(prev_s)
+                state = prev_s
 
-        segmentos.reverse()
-        path_states.reverse()
+            segmentos.reverse()
+            path_states.reverse()
 
-        print(f"[RUTA] Segmentos en la ruta final: {len(segmentos)}")
-        for i, seg in enumerate(segmentos[:50]):
-            print(
-                f"   [RUTA] {i} "
-                f"{seg.from_punto_id} -> {seg.to_punto_id} "
-                f"linea={seg.linea_codigo} sentido={seg.numero_ruta} "
-                f"tiempo={seg.tiempo} dist={seg.distancia} "
-                f"caminar={seg.es_caminar}"
-            )
-        if len(segmentos) > 50:
-            print(f"   [RUTA] ... ({len(segmentos) - 50} segmentos más)")
+            print(f"[RUTA #{idx_ruta + 1}] Segmentos: {len(segmentos)}")
 
-        node_ids = [st[0] for st in path_states]
-        print(f"[RUTA] Nodos en la ruta: {node_ids}")
+            node_ids = [st[0] for st in path_states]
+            num_nodos = len(node_ids)
 
-        num_nodos = len(node_ids)
+            linea_trasbordo_flags = [None] * num_nodos
 
-        linea_trasbordo_flags = [None] * num_nodos
+            for i in range(1, num_nodos - 1):
+                prev_line_ruta = path_states[i - 1][1]
+                curr_line_ruta = path_states[i][1]
 
-        for i in range(1, num_nodos - 1):
-            prev_line = path_states[i - 1][1]
-            curr_line = path_states[i][1]
+                if prev_line_ruta is None:
+                    continue
 
-            if prev_line is None:
-                continue
+                if prev_line_ruta != curr_line_ruta and curr_line_ruta is not None:
+                    incoming_edge = segmentos[i - 1]
+                    if not incoming_edge.es_caminar:
+                        # Verificar si es transbordo real (diferente codigo_base)
+                        prev_codigo_base = linea_ruta_to_codigo_base.get(prev_line_ruta)
+                        curr_codigo_base = incoming_edge.linea_codigo_base
+                        
+                        # Solo marcar como transbordo si cambia el codigo_base
+                        if prev_codigo_base and curr_codigo_base and prev_codigo_base != curr_codigo_base:
+                            linea_trasbordo_flags[i] = incoming_edge.linea_codigo
 
-            if prev_line != curr_line and curr_line is not None:
-                incoming_edge = segmentos[i - 1]
-                if not incoming_edge.es_caminar:
-                    linea_trasbordo_flags[i] = incoming_edge.linea_codigo
+            tiempo_acumulado = Decimal("0")
+            distancia_acumulada = Decimal("0")
+            puntos_data = []
+            orden = 1
 
-        print("[RUTA] Flags de trasbordo por nodo:", linea_trasbordo_flags)
+            for idx, punto_id in enumerate(node_ids):
+                p = puntos_by_id[punto_id]
 
-        tiempo_acumulado = Decimal("0")
-        distancia_acumulada = Decimal("0")
-        puntos_data = []
-        orden = 1
+                if idx == 0:
+                    puntos_data.append(
+                        {
+                            "orden": orden,
+                            "latitud": p.latitud,
+                            "longitud": p.longitud,
+                            "descripcion": p.descripcion,
+                            "distancia_tramo": Decimal("0"),
+                            "distancia_acumulada": distancia_acumulada,
+                            "tiempo_tramo": Decimal("0"),
+                            "tiempo_acumulado": tiempo_acumulado,
+                            "linea_trasbordo": linea_trasbordo_flags[idx],
+                        }
+                    )
+                    orden += 1
+                    continue
 
-        for idx, punto_id in enumerate(node_ids):
-            p = puntos_by_id[punto_id]
+                edge = segmentos[idx - 1]
+                tiempo_acumulado += edge.tiempo
+                distancia_acumulada += edge.distancia
 
-            if idx == 0:
                 puntos_data.append(
                     {
                         "orden": orden,
                         "latitud": p.latitud,
                         "longitud": p.longitud,
                         "descripcion": p.descripcion,
-                        "distancia_tramo": Decimal("0"),
+                        "distancia_tramo": edge.distancia,
                         "distancia_acumulada": distancia_acumulada,
-                        "tiempo_tramo": Decimal("0"),
+                        "tiempo_tramo": edge.tiempo,
                         "tiempo_acumulado": tiempo_acumulado,
                         "linea_trasbordo": linea_trasbordo_flags[idx],
                     }
                 )
                 orden += 1
-                continue
 
-            edge = segmentos[idx - 1]
-            tiempo_acumulado += edge.tiempo
-            distancia_acumulada += edge.distancia
+            lineas_usadas_map = {}
+            for edge in segmentos:
+                if edge.es_caminar:
+                    continue
+                key = (edge.linea_id, edge.numero_ruta)
+                if key not in lineas_usadas_map:
+                    lineas_usadas_map[key] = {
+                        "codigo": edge.linea_codigo,
+                        "nombre": edge.linea_nombre,
+                        "sentido": edge.numero_ruta,
+                        "linea_id": edge.linea_id,
+                    }
+            lineas_usadas = list(lineas_usadas_map.values())
 
-            puntos_data.append(
-                {
-                    "orden": orden,
-                    "latitud": p.latitud,
-                    "longitud": p.longitud,
-                    "descripcion": p.descripcion,
-                    "distancia_tramo": edge.distancia,
-                    "distancia_acumulada": distancia_acumulada,
-                    "tiempo_tramo": edge.tiempo,
-                    "tiempo_acumulado": tiempo_acumulado,
-                    "linea_trasbordo": linea_trasbordo_flags[idx],
-                }
-            )
-            orden += 1
+            # Agrupar por linea_id para mostrar solo una vez cada línea (independiente del sentido)
+            lineas_unicas = {}
+            for linea in lineas_usadas:
+                linea_id = linea["linea_id"]
+                if linea_id not in lineas_unicas:
+                    lineas_unicas[linea_id] = linea
 
-        if tiempo_acumulado != dist[best_state]:
-            print(
-                f"[RUTA][WARN] tiempo_acumulado={tiempo_acumulado} "
-                f"!= costo_best={dist[best_state]}"
-            )
-
-        lineas_usadas_map = {}
-        for edge in segmentos:
-            if edge.es_caminar:
-                continue
-            key = (edge.linea_id, edge.numero_ruta)
-            if key not in lineas_usadas_map:
-                lineas_usadas_map[key] = {
-                    "codigo": edge.linea_codigo,
-                    "nombre": edge.linea_nombre,
-                    "sentido": edge.numero_ruta,
-                }
-        lineas_usadas = list(lineas_usadas_map.values())
-        print("[RUTA] Líneas de BUS usadas en el trayecto:", lineas_usadas)
-
-        if lineas_usadas:
-            detalles = [
-                f"{l['codigo']} (sentido {l['sentido']})"
-                for l in lineas_usadas
-            ]
-            if len(detalles) == 1:
-                texto_lineas_simple = f"utilizando la línea {detalles[0]}"
+            if lineas_unicas:
+                detalles = [
+                    f"{l['codigo']}"
+                    for l in lineas_unicas.values()
+                ]
+                if len(detalles) == 1:
+                    texto_lineas_simple = f"utilizando la línea {detalles[0]}"
+                else:
+                    texto_lineas_simple = (
+                        "utilizando las líneas "
+                        + ", ".join(detalles[:-1])
+                        + f" y {detalles[-1]}"
+                    )
             else:
-                texto_lineas_simple = (
-                    "utilizando las líneas "
-                    + ", ".join(detalles[:-1])
-                    + f" y {detalles[-1]}"
-                )
-        else:
-            texto_lineas_simple = "sin utilizar líneas"
+                texto_lineas_simple = "sin utilizar líneas"
 
-        inicio_punto_real = puntos_by_id[node_ids[0]]
-        fin_punto_real = puntos_by_id[node_ids[-1]]
+            inicio_punto_real = puntos_by_id[node_ids[0]]
+            fin_punto_real = puntos_by_id[node_ids[-1]]
 
-        descripcion_ruta = (
-            f"Ruta desde {describir_punto(inicio_punto_real)} "
-            f"hasta {describir_punto(fin_punto_real)}, "
-            f"{texto_lineas_simple} "
-            f"y como máximo {max_trasbordos} trasbordos."
-        )
+            descripcion_ruta = (
+                f"Ruta desde {describir_punto(inicio_punto_real)} "
+                f"hasta {describir_punto(fin_punto_real)}, "
+                f"{texto_lineas_simple} "
+                f"y como máximo {max_trasbordos} trasbordos."
+            )
 
-        print("[RUTA] Descripción generada:", descripcion_ruta)
+            print(f"[RUTA #{idx_ruta + 1}] Descripción: {descripcion_ruta}")
 
-        payload = {
-            "lineas": lineas_usadas,
-            "descripcion_ruta": descripcion_ruta,
-            "distancia_total": distancia_acumulada,
-            "tiempo_total": tiempo_acumulado,
-            "puntos": puntos_data,
-        }
+            ruta_data = {
+                "lineas": lineas_usadas,
+                "descripcion_ruta": descripcion_ruta,
+                "distancia_total": distancia_acumulada,
+                "tiempo_total": tiempo_acumulado,
+                "puntos": puntos_data,
+            }
+            rutas_procesadas.append(ruta_data)
 
-        resp_serializer = RutaPlanificadaSerializer(instance=payload)
+        payload = {"rutas": rutas_procesadas}
+
+        resp_serializer = MultipleRutasSerializer(instance=payload)
         return Response(resp_serializer.data, status=status.HTTP_200_OK)

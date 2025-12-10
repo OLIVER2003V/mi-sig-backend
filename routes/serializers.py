@@ -68,3 +68,8 @@ class RutaPlanificadaSerializer(serializers.Serializer):
     tiempo_total = serializers.DecimalField(max_digits=6, decimal_places=2)
 
     puntos = PuntoRutaPlanificadaSerializer(many=True)
+
+
+class MultipleRutasSerializer(serializers.Serializer):
+    """Serializer para devolver múltiples rutas alternativas"""
+    rutas = RutaPlanificadaSerializer(many=True)
